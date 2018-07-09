@@ -290,3 +290,342 @@ myint: 99
 ```
 
 ## charts/ディレクトリを使った手動管理
+
+charts/ディレクトリ配下にchart設定を置くことでも依存関係を管理できる。
+基本的には、より詳細に依存関係を管理したい場合に利用する。
+
+## 依存関係を利用することについての運用観点整理
+
+```
+A名前空間
+  ┣ Aステートフルセット
+  ┗ Aサービス
+```
+
+```
+B名前空間
+  ┣ Bレプリカセット
+  ┗ Bサービス
+```
+
+AがBに依存している場合、以下の順番でリソースが作成される。
+
+1. A名前空間
+2. B名前空間
+3. Aステートフルセット
+4. Bレプリカセット
+5. Aサービス
+6. Bサービス
+
+単一のリリースが作成されたらチャートのすべてのオブジェクトとその依存関係がオブジェクトが作成される。
+
+# テンプレートと値
+
+すべてのテンプレートファイルは `templates/` ディレクトリに格納される。
+
+- テンプレートに対する値の導入方法
+  - `values.yaml` ファイルの利用(デフォルト値の提供)
+  - `helm install` 時にファイルを指定
+
+## テンプレートファイルの書き方
+
+[Go templates](https://golang.org/pkg/text/template/)の書き方に準じる。
+
+## values.yamlの扱い
+
+`values.yaml`ファイルは最小限必要なデフォルト値の提供を機能として担う。
+
+### 他のyamlファイルによるオーバーライド
+
+`helm install --values=独自の値のyamlファイル.yaml チャート名`
+
+とすると、values.yamlの値は上書きされる。
+
+### install/upgrade時のオプション(--set)
+
+- `helm install --set A=B チャート名`
+- `halm upgrade --set A=B リリース名`
+
+などとすることで上書きできるが、**コマンド形式はfreakyな状況を招く**ので、利用は進めない。
+
+## テンプレートのファイルの例と解説
+
+```
+apiVersion: v1
+kind: ReplicationController
+metadata:
+  name: deis-database
+  namespace: deis
+  labels:
+    heritage: deis
+spec:
+  replicas: 1
+  selector:
+    app: deis-database
+  template:
+    metadata:
+      labels:
+        app: deis-database
+    spec:
+      serviceAccount: deis-database
+      containers:
+        - name: deis-database
+          image: {{.Values.imageRegistry}}/postgres:{{.Values.dockerTag}}
+          imagePullPolicy: {{.Values.pullPolicy}}
+          ports:
+            - containerPort: 5432
+          env:
+            - name: DATABASE_STORAGE
+              value: {{default "minio" .Values.storage}}
+```
+
+### valuesファイル
+
+`{{ .Values.キー名 }}` で値を提供するファイルからの値を読み込むことができる。
+
+### 事前定義済みのキー
+
+|キー|内容|備考|
+|---|---|---|
+|Release.Name|リリースの名前||
+|Release.Time|チャートのリリースが最後にアップデートされた時間||
+|Release.Namespace|チャートが紐づいているk8sの名前空間||
+|Release.Service|リリースを実行しているサービス、通常は`Tiller`になる||
+|Release.IsUpgrade|Upgrade/Rollbackか否か||
+|Release.IsInstall|Installか否か||
+|Release.Revision|`helm upgrade`を実行するたびに値が上がる(1始まり)||
+|Chart|`Chart.yaml`の中身。`Chart.Version`などでChart.yamlに記述された値を取り出すことができる||
+|Files|チャートに含まれる全ての特別でないファイルを含んだマップ様オブジェクト|詳細は別途調査&説明|
+|Capabilities|k8sのバージョンについての情報を含んだマップ様オブジェクト||
+
+#### Capabilitiesについて
+
+チャートおよびリリースがどのような環境であれば実行可能であるかの情報があらわれる。
+
+|キー|内容|
+|---|---|
+|.Capabilities.KubeVersion|対応するk8sのバージョン|
+|.Capabilities.TillerVersion|対応するTillerのバージョン|
+|.Capabilitik.Has "batch/v1"|batch/v1を持つAPIバージョン|
+
+## スコープ、依存とValues
+
+Valuesは一番上位のチャートでのみ宣言できる。
+
+valuesファイルは、その依存関係内部にも値を提供することができる。
+
+下の例はwordpressチャートに含まれるmysqlチャートとapacheチャートに
+値を提供している。
+
+```
+title: "My WordPress Site" # Sent to the WordPress template
+
+mysql:
+  max_connections: 100 # Sent to MySQL
+  password: "secret"
+
+apache:
+  port: 8080 # Passed to Apache
+```
+
+この場合、MySQLは `.Values.mysql.password`にはアクセスできるが、
+`title`にはアクセスできない。
+
+
+値は名前空間で区切られているのが、名前空間情報は取り除くことができる。
+Wordpressチャートからは`.Values.mysql.password`でMySQLのパスワードにアクセスするが、
+MySQLチャートでは`mysql`名前空間内部なこともあり、`.Values.password`でMySQLのパスワードにアクセスできる。
+
+### Globalスコープ
+
+```
+title: "My WordPress Site" # Sent to the WordPress template
+
+global:
+  app: MyWordPress
+
+mysql:
+  max_connections: 100 # Sent to MySQL
+  password: "secret"
+
+apache:
+  port: 8080 # Passed to Apache
+```
+
+チャートからはトップレベルでも、依存関係に含まれるものでも `{{ .Values.global.app }}`でアクセスできる。
+
+```
+title: "My WordPress Site" # Sent to the WordPress template
+
+global:
+  app: MyWordPress
+
+mysql:
+  global:
+    app: MyWordPress
+  max_connections: 100 # Sent to MySQL
+  password: "secret"
+
+apache:
+  global:
+    app: MyWordPress
+  port: 8080 # Passed to Apache
+```
+
+内部的には、こう解釈される。
+
+# チャートの作成・パッケージング・テスト
+
+- 作成
+  - `helm create チャート名`
+- パッケージング
+  - `helm package チャート名`
+- テスト(Lint)
+  - `helm lint チャート名`
+
+
+# チャートリポジトリ
+
+- チャートリポジトリ
+  - チャートのパッケージを格納するHTTPサーバ
+  - `helm`自体のローカルリポジトリを`helm serve`でチャートリポジトリとして提供することも可能(テスト・開発用)
+  - YAMLファイルを提供できるHTTPサーバであればなんでもOK
+
+- `index.yaml`にリポジトリないの全チャートの情報(メタデータ含む)が含まれていればOK
+- クライアントサイドでは`helm repo`で色々できる`
+
+
+## チャートのスターターパック
+
+`helm create --startar`でチャートのベースとなるファイル一式を`$HELM_HOME/starters`ディレクトリ配下に存在する。
+
+# Hook
+
+Helmは処理の途中で割り込みを行なって色々な動作を実現できるようにしている。
+
+- 利用例
+  1. Chart読み込みの前にConfigMapやSecretを読み込む
+  2. 新しいチャートをインストールする前にDBをバックアップするジョブを実行して、データをアップグレードする
+  3. サービスをローテションの外にグレースフルに持っていくジョブを特定のリリースを削除する前に実行する
+
+
+## Hook一覧
+
+1. pre-install
+2. post-install
+3. pre-delete
+4. post-delete
+5. pre-upgrade
+6. post-upgrade
+7. pre-rollback
+8. post-rollback
+9. crd-install
+
+### Hookとリリースのライフサイクル
+
+1. `helm install foo`
+2. Tillerにチャートが読み込まれる
+3. バリデーションの後にfooのテンプレートがレンダリングされる
+4. Tillerがk8sに最終的に出来上がったリソースを読み込ませる
+5. Tillerがリリースの名前をクライアントに返す
+6. クライアントが終了
+
+### Hookの例
+
+- Hookもk8sのリソースとして記述する。
+- `annotations`でどのタイミングをHookとして実行するかを指定
+
+```
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: "{{.Release.Name}}"
+  labels:
+    heritage: {{.Release.Service | quote }}
+    release: {{.Release.Name | quote }}
+    chart: "{{.Chart.Name}}-{{.Chart.Version}}"
+  annotations:
+    # This is what defines this resource as a hook. Without this line, the
+    # job is considered part of the release.
+    "helm.sh/hook": post-install
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": hook-succeeded
+spec:
+  template:
+    metadata:
+      name: "{{.Release.Name}}"
+      labels:
+        heritage: {{.Release.Service | quote }}
+        release: {{.Release.Name | quote }}
+        chart: "{{.Chart.Name}}-{{.Chart.Version}}"
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: post-install-job
+        image: "alpine:3.3"
+        command: ["/bin/sleep","{{default "10" .Values.sleepyTime}}"]
+```
+
+この例の場合は`post-install`で実行する。
+もう少し細かく書いせる
+
+```
+  annotations:
+    # This is what defines this resource as a hook. Without this line, the
+    # job is considered part of the release.
+    "helm.sh/hook": post-install # post-installで実行
+    "helm.sh/hook-weight": "-5" # 同一hook設定が存在した場合の優先度を指定(-5なのでかなり優先度高め)
+    "helm.sh/hook-delete-policy": hook-succeeded # hookが成功したら削除する
+```
+
+# テンプレートのTips
+
+## Imageのpullシークレット
+
+```
+imageCredentials:
+  registry: quay.io
+  username: someone
+  password: sillyness
+```
+
+```
+{{- define "imagePullSecret" }}
+{{- printf "{\"auths\": {\"%s\": {\"auth\": \"%s\"}}}" .Values.imageCredentials.registry (printf "%s:%s" .Values.imageCredentials.username .Values.imageCredentials.password | b64enc) | b64enc }}
+{{- end }}
+```
+
+```
+apiVersion: v1
+kind: Secret
+metadata:
+  name: myregistrykey
+type: kubernetes.io/dockerconfigjson
+data:
+  .dockerconfigjson: {{ template "imagePullSecret" . }}
+```
+
+こんな感じ。
+
+## ConfigMap/Secretsの変更でdeploymentsをrolling upgradeする
+
+```
+kind: Deployment
+spec:
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+[...]
+```
+
+`annotations`で変更を検知する対象を指定した後に、
+`helm upgrade`を実行することで変更できる。
+(ただし、ConfigMapやSecretsの変更が実際に発生した場合のみ)
+
+## PARTIALとテンプレートのInclude
+
+templateディレクトリ配下の`_`で始まるファイルは
+k8sのマニフェストファイルを直接出力されることは期待されない。
+慣習的に、`_helpers.tpl`ファイルに部分が記述される
+
