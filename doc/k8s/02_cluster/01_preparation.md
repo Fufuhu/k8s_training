@@ -227,3 +227,23 @@ spec:
     - containerPort: 80
 
 ```
+
+
+なんかRKEじゃ無理くさいので
+
+https://linuxconfig.org/how-to-install-kubernetes-on-ubuntu-18-04-bionic-beaver-linux
+
+にしたがって準備することにしよう
+
+```
+sudo apt install docker.io
+sudo systemctl unmask docker.service
+sudo usermod -aG docker fujiwara
+sudo systemctl restart docker
+```
+
+dockerグループが存在しない場合は
+```
+sudo groupadd docker
+```
+を実行した上で`usermod`を実行する。
