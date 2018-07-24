@@ -159,7 +159,7 @@ echo "-w /usr/bin/docker-containerd -p wa" | sudo tee -a /etc/audit/audit.rules
 echo "-w /usr/bin/docker-runc -p wa" | sudo tee -a /etc/audit/audit.rules
 ```
 
-```
+```bash
 $ sudo systemctl restart auditd
 $ sudo auditctl -l
 -w /usr/bin/docker -p wa
@@ -171,3 +171,108 @@ $ sudo auditctl -l
 -w /etc/docker/daemon.json -p wa
 -w /usr/bin/docker-containerd -p wa
 -w /usr/bin/docker-runc -p wa
+```
+
+## 2.5  - Ensure aufs storage driver is not used
+
+```bash
+$ sudo docker info
+〜〜〜〜中略〜〜〜〜
+Storage Driver: aufs
+ Root Dir: /var/lib/docker/aufs
+ Backing Filesystem: extfs
+〜〜〜〜略〜〜〜〜
+```
+
+はい、残念。`aufs`を使っていました。
+最新の`overlay2`ストレージドライバに変更しましょう。
+
+[Dockerのストレージドライバの変更](https://qiita.com/RyoMa_0923/items/28d1aeb2d98b12fc7549) をベースに修正。
+
+
+まず、dockerdを停止します。
+
+```bash
+$ sudo systemctl stop docker
+```
+
+
+`/lib/systemd/system/docker.service`を修正。
+
+```text
+ExecStart=/usr/bin/dockerd -H fd://
+```
+
+`ExecStart`に`--config-file /etc/docker/daemon.json`を追加します。
+
+```text
+ExecStart=/usr/bin/dockerd -H fd:// --config-file /etc/docker/daemon.json
+```
+
+```json
+{
+	"disable-legacy-registry": true,
+	"icc": false,
+	"live-restore": true,
+	"storage-driver": "overlay2",
+	"userland-proxy": false,
+	"userns-remap": "default"
+}
+```
+
+設定の変更を反映して、dockerdを再起動させます。
+
+```bash
+$ sudo systemctl daemon-reload
+$ sudo systemctl start docker
+```
+
+`docker info`で利用しているストレージドライバを確認します。
+
+```bash
+$ docker info
+〜〜〜〜中略〜〜〜〜
+Storage Driver: overlay2
+ Backing Filesystem: extfs
+〜〜〜〜略〜〜〜〜
+```
+
+## [WARN] 2.12 - Ensure centralized and remote logging is configured
+
+
+rsyslogdの設定(`/etc/rsyslog.conf`)を修正する。
+
+```text
+# provides TCP syslog reception
+# module(load="imtcp")
+# input(type="imtcp" port="514")
+```
+TCPでアクセスを受け付けるようにする。
+
+```
+# provides TCP syslog reception
+module(load="imtcp")
+input(type="imtcp" port="514")
+$AllowedSender TCP, 127.0.0.1, 192.168.0.0/24
+```
+
+`log-driver`に`syslog`を指定し、
+`log-opts`の`syslog-address`に`tcp://127.0.0.1:514`を指定。
+
+
+```json
+{
+	"disable-legacy-registry": true,
+	"icc": false,
+	"live-restore": true,
+	"storage-driver": "overlay2",
+	"log-driver": "syslog",
+	"log-opts": {
+    	"syslog-address": "tcp://127.0.0.1:514"
+  	},
+	"userland-proxy": false,
+	"userns-remap": "default"
+}
+```
+
+参考) https://www.nearform.com/blog/securing-docker-containers-on-aws/
