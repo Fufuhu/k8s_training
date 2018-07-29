@@ -13,6 +13,9 @@ Dockerの公式ドキュメントにDockerのセキュリティについて述�
 
 ## Docker Bench for Securityの実行
 
+GithubのリポジトリのREADME.mdでは実行は以下のように
+していされている。
+
 ```bash
 $ docker run -it --net host --pid host --userns host --cap-add audit_control \
     -e DOCKER_CONTENT_TRUST=$DOCKER_CONTENT_TRUST \
@@ -23,17 +26,27 @@ $ docker run -it --net host --pid host --userns host --cap-add audit_control \
     docker/docker-bench-security
 ```
 
-これではパスしたものも大量に出てくるので警告(`WARN`)のみを洗い出す。
+しかし、これではdockerの仕組み上一部の試験がどうしてもうまく行かない部分が
+あるので以下のように修正する。
+ついでに`--rm`を追加して実行後はコンテナを削除する。
 
 ```bash
-$ docker run -it --net host --pid host --userns host --cap-add audit_control \
+$ docker run -it --rm --net host --pid host --userns host --cap-add audit_control \
     -e DOCKER_CONTENT_TRUST=$DOCKER_CONTENT_TRUST \
     -v /var/lib:/var/lib \
     -v /var/run/docker.sock:/var/run/docker.sock \
     -v /usr/lib/systemd:/usr/lib/systemd \
     -v /etc:/etc --label docker_bench_security \
-    docker/docker-bench-security | grep WARN
+	-v /usr/bin/docker-containerd:/usr/bin/docker-containerd \
+	-v /usr/bin/docker-runc:/usr/bin/docker-runc \
+    docker/docker-bench-security
 ```
+
+すべてのチェックを正常に動かすには、コンテナ殻ではなく直接動かすほうがベターである。
+
+これではパスしたものも大量に出てくるので警告(`WARN`)のみを洗い出す。
+(`grep WARN`にパイプする)
+
 
 ## Docker Bench for Securityの実行結果
 
@@ -59,7 +72,7 @@ $ docker run -it --net host --pid host --userns host --cap-add audit_control    
 
 以降ではそれぞれのWARNについて警告内容への反映を行う。
 
-### 1.1 - Ensure a separete partieion for containers has been created
+### 1.1 - Ensure a separete partition for containers has been created
 
 ```bash
 $ sudo systemctl stop docker
@@ -113,7 +126,7 @@ Writing superblocks and filesystem accounting information: done
 $ sudo mount -a
 $ df -h
 Filesystem                         Size  Used Avail Use% Mounted on
-~~~ 中略 ~~~
+〜〜〜 中略 〜〜〜 
 /dev/sdb1                           99G   60M   94G   1% /var/lib/docker
 ```
 
@@ -125,55 +138,138 @@ $ sudo systemctl start docker
 [WARN] 1.1  - Ensure a separate partition for containers has been created
 `の表示が消えていることを確認する。
 
-### 1.5  - Ensure auditing is configured for the Docker daemon
+### 1.5 - 1.13 監査系の機能のチェック
+
+ここでは、`INFO`レベルのものを含むがまとめで記述する。
+
+
+Dockerデーモンに対しての監査が行われてることを確認する。
+ここでは監査の仕組みとして`auditd`を利用している。
+
+`auditd`のインストールはUbuntuでは以下で行う。
+auditdの設定内容は`/etc/audit/audit.rules`に書き込む。
 
 ```bash
 $ sudo apt-get update
 $ sudo apt-get install -y auditd
 ```
-これはちょっとわからないので一旦スキップ
+
+対象となる認証系機能は以下の通り。
+
+- 1.5  - Ensure auditing is configured for the Docker daemon
+- 1.6  - Ensure auditing is configured for Docker files and directories - /var/lib/docker
+- 1.7  - Ensure auditing is configured for Docker files and directories - /etc/docker
+- 1.8  - Ensure auditing is configured for Docker files and directories - docker.service
+- 1.9  - Ensure auditing is configured for Docker files and directories - docker.socket
+- 1.10 - Ensure auditing is configured for Docker files and directories - /etc/default/docker
+- 1.11 - Ensure auditing is configured for Docker files and directories - /etc/docker/daemon.json
+- 1.12 - Ensure auditing is configured for Docker files and directories - /usr/bin/docker-containerd
+- 1.13 - Ensure auditing is configured for Docker files and directories - /usr/bin/docker-runc
 
 参考: https://github.com/nearform/devops/tree/master/packer/securing-docker
 
-### 1.6  - Ensure auditing is configured for Docker files and directories - /var/lib/docker
+#### 1.5  - Ensure auditing is configured for the Docker daemon
 
+Dockerのデーモンを監査対象とする。(※)
+
+※Dockerのデーモンなら`dockerd`のはずだがツールでは、対象が`docker`になっているので一旦はこれで良しとする。
 
 ```bash
-# 1.5  - Ensure auditing is configured for the Docker daemon
-echo "-w /usr/bin/docker -p wa" | sudo tee -a /etc/audit/audit.rules
-# 1.6  - Ensure auditing is configured for Docker files and directories - /var/lib/docker
-echo "-w /var/lib/docker -p wa" | sudo tee -a /etc/audit/audit.rules
-# 1.7  - Ensure auditing is configured for Docker files and directories - /etc/docker"
-echo "-w /etc/docker -p wa" | sudo tee -a /etc/audit/audit.rules
-# 1.8  - Ensure auditing is configured for Docker files and directories - docker.service
-echo "-w /lib/systemd/system/docker.service -p wa" | sudo tee -a /etc/audit/audit.rules
-# 1.9  - Ensure auditing is configured for Docker files and directories - docker.socket
-echo "-w /lib/systemd/system/docker.socket -p wa" | sudo tee -a /etc/audit/audit.rules
-# 1.10 - Ensure auditing is configured for Docker files and directories - /etc/default/docker
-echo "-w /etc/default/docker -p wa" | sudo tee -a /etc/audit/audit.rules
-# 1.11 - Ensure auditing is configured for Docker files and directories - /etc/docker/daemon.json
-echo "-w /etc/docker/daemon.json -p wa" | sudo tee -a /etc/audit/audit.rules
-# 1.12 - Ensure auditing is configured for Docker files and directories - /usr/bin/docker-containerd
-echo "-w /usr/bin/docker-containerd -p wa" | sudo tee -a /etc/audit/audit.rules
-# 1.13 - Ensure auditing is configured for Docker files and directories - /usr/bin/docker-runc
-echo "-w /usr/bin/docker-runc -p wa" | sudo tee -a /etc/audit/audit.rules
+$ echo "-w /usr/bin/docker -p wa" | sudo tee -a /etc/audit/audit.rules
 ```
 
+#### 1.6  - Ensure auditing is configured for Docker files and directories - /var/lib/docker
+
+`/var/lib/docker`ディレクトリ配下を監査対象とする。
+
 ```bash
-$ sudo systemctl restart auditd
-$ sudo auditctl -l
--w /usr/bin/docker -p wa
--w /var/lib/docker/ -p wa
--w /etc/docker/ -p wa
--w /lib/systemd/system/docker.service -p wa
--w /lib/systemd/system/docker.socket -p wa
--w /etc/default/docker -p wa
--w /etc/docker/daemon.json -p wa
--w /usr/bin/docker-containerd -p wa
--w /usr/bin/docker-runc -p wa
+$ echo "-w /var/lib/docker -p wa" | sudo tee -a /etc/audit/audit.rules
+```
+
+
+#### 1.7  - Ensure auditing is configured for Docker files and directories - /etc/docker
+
+`/etc/docker`ディレクトリ(dockerdの設定ファイルを格納したディレクトリ)配下を
+監査対象とする。
+
+
+```bash
+echo "-w /etc/docker -p wa" | sudo tee -a /etc/audit/audit.rules
+```
+
+#### 1.8  - Ensure auditing is configured for Docker files and directories - docker.service
+
+```bash
+echo "-w /lib/systemd/system/docker.service -p wa" | sudo tee -a /etc/audit/audit.rules
+```
+
+設定してもどうも`INFO`から`PASS`にならないのでこれについては別途調査する。
+
+#### 1.9  - Ensure auditing is configured for Docker files and directories - docker.socket
+
+```bash
+$ echo "-w /lib/systemd/system/docker.socket -p wa" | sudo tee -a /etc/audit/audit.rules
+```
+
+#### 1.10 - Ensure auditing is configured for Docker files and directories - /etc/default/docker
+
+ファイルの中身を見るとわかるとおり、Ubuntuで配布されているdockerについては
+このファイルはデフォルトでは意味をなさないが一応監査対象とする。
+
+```bash
+$ echo "-w /etc/default/docker -p wa" | sudo tee -a /etc/audit/audit.rules
+```
+
+#### 1.11 - Ensure auditing is configured for Docker files and directories - /etc/docker/daemon.json
+
+```bash
+$ echo "-w /etc/docker/daemon.json -p wa" | sudo tee -a /etc/audit/audit.rules
+```
+
+#### 1.12 - Ensure auditing is configured for Docker files and directories - /usr/bin/docker-containerd
+
+```bash
+$ echo "-w /usr/bin/docker-containerd -p wa" | sudo tee -a /etc/audit/audit.rules
+```
+
+#### 1.13 - Ensure auditing is configured for Docker files and directories - /usr/bin/docker-runc
+
+```bash
+$ echo "-w /usr/bin/docker-runc -p wa" | sudo tee -a /etc/audit/audit.rules
+```
+
+## 2.1 - Ensure network traffic is restricted between containers on the default bridge
+
+`/lib/systemd/system/docker.service`を修正。
+
+```text
+ExecStart=/usr/bin/dockerd -H fd://
+```
+
+`ExecStart`に`--config-file /etc/docker/daemon.json`を追加します。
+
+```text
+ExecStart=/usr/bin/dockerd -H fd:// --config-file=/etc/docker/daemon.json
+```
+
+`/etc/docker/daemon.json`を作成して、以下を追加します。
+
+```json
+{
+	"icc": false
+}
+```
+
+ここまで終わったら`dockerd`を再起動します。
+
+```bash
+$ sudo systemctl daemon-reload
+$ sudo systemctl restart docker
 ```
 
 ## 2.5  - Ensure aufs storage driver is not used
+
+最近のversionのdockerであれば`aufsは使っていないので警告は出ない`のでその点は注意してください。
 
 ```bash
 $ sudo docker info
@@ -190,41 +286,19 @@ Storage Driver: aufs
 [Dockerのストレージドライバの変更](https://qiita.com/RyoMa_0923/items/28d1aeb2d98b12fc7549) をベースに修正。
 
 
-まず、dockerdを停止します。
 
-```bash
-$ sudo systemctl stop docker
-```
-
-
-`/lib/systemd/system/docker.service`を修正。
-
-```text
-ExecStart=/usr/bin/dockerd -H fd://
-```
-
-`ExecStart`に`--config-file /etc/docker/daemon.json`を追加します。
-
-```text
-ExecStart=/usr/bin/dockerd -H fd:// --config-file /etc/docker/daemon.json
-```
 
 ```json
 {
-	"disable-legacy-registry": true,
 	"icc": false,
-	"live-restore": true,
-	"storage-driver": "overlay2",
-	"userland-proxy": false,
-	"userns-remap": "default"
+	"storage-driver": "overlay2"
 }
 ```
 
-設定の変更を反映して、dockerdを再起動させます。
+設定の変更が終わったら、dockerdを再起動させます。
 
 ```bash
-$ sudo systemctl daemon-reload
-$ sudo systemctl start docker
+$ sudo systemctl restart docker
 ```
 
 `docker info`で利用しているストレージドライバを確認します。
@@ -237,13 +311,30 @@ Storage Driver: overlay2
 〜〜〜〜略〜〜〜〜
 ```
 
-## [WARN] 2.12 - Ensure centralized and remote logging is configured
+期待したとおりに`overlay2`になってますね。
+ます。
+
+## 2.8  - Enable user namespace support
+
+実は最近のversionではすでにデフォルトで有効になっているけれども明示的に有効化する。
+`/etc/docker/daemon.json`を改めて修正する。
+
+```json
+{
+	"icc": false,
+	"storage-driver": "overlay2",
+	"userns-remap": "default"
+}
+```
+
+## 2.12 - Ensure centralized and remote logging is configured
 
 
 rsyslogdの設定(`/etc/rsyslog.conf`)を修正する。
 
 ```text
-# provides TCP syslog reception
+# provides TCP Init Binary: docker-init
+syslog reception
 # module(load="imtcp")
 # input(type="imtcp" port="514")
 ```
@@ -262,16 +353,60 @@ $AllowedSender TCP, 127.0.0.1, 192.168.0.0/24
 
 ```json
 {
-	"disable-legacy-registry": true,
 	"icc": false,
-	"live-restore": true,
 	"storage-driver": "overlay2",
+	"userns-remap": "default",
 	"log-driver": "syslog",
 	"log-opts": {
-    	"syslog-address": "tcp://127.0.0.1:514"
+		"syslog-address": "tcp://127.0.0.1:514"
+  	}
+}
+```
+
+## 2.14 - Ensure live restore is Enabled
+
+```json
+{
+	"icc": false,
+	"storage-driver": "overlay2",
+	"userns-remap": "default",
+	"log-driver": "syslog",
+	"log-opts": {
+		"syslog-address": "tcp://127.0.0.1:514"
   	},
+	"live-restore": true
+}
+```
+
+## 2.15 - Ensure Userland Proxy is Disabled
+
+```json
+{
+	"icc": false,
+	"storage-driver": "overlay2",
+	"userns-remap": "default",
+	"log-driver": "syslog",
+	"log-opts": {
+    		"syslog-address": "tcp://127.0.0.1:514"
+  	},
+	"live-restore": true,
+	"userland-proxy": false
+}
+```
+## 2.18 - Ensure containers are restricted from acquiring new privileges
+
+```json
+{
+	"icc": false,
+	"storage-driver": "overlay2",
+	"userns-remap": "default",
+	"log-driver": "syslog",
+	"log-opts": {
+    		"syslog-address": "tcp://127.0.0.1:514"
+  	},
+	"live-restore": true,
 	"userland-proxy": false,
-	"userns-remap": "default"
+	"no-new-privileges": true
 }
 ```
 
