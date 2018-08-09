@@ -1,4 +1,4 @@
-# Dockerのセキュリティの確保について
+# Docker bench for Security(1. Dockerホストの設定編)
 
 Dockerの公式ドキュメントにDockerのセキュリティについて述べられたものがある。
 
@@ -11,42 +11,23 @@ Dockerの公式ドキュメントにDockerのセキュリティについて述�
 
 これをここでは活用してよりセキュアな環境を実現させる。
 
+## 前提
+
+- Ubuntu 16.04
+- docker 17.12.1-ce
+
 ## Docker Bench for Securityの実行
 
-GithubのリポジトリのREADME.mdでは実行は以下のように
-していされている。
-
-```bash
-$ docker run -it --net host --pid host --userns host --cap-add audit_control \
-    -e DOCKER_CONTENT_TRUST=$DOCKER_CONTENT_TRUST \
-    -v /var/lib:/var/lib \
-    -v /var/run/docker.sock:/var/run/docker.sock \
-    -v /usr/lib/systemd:/usr/lib/systemd \
-    -v /etc:/etc --label docker_bench_security \
-    docker/docker-bench-security
-```
-
+Githubのリポジトリでは最初にDockerイメージを使った実行方法が説明されている。
 しかし、これではdockerの仕組み上一部の試験がどうしてもうまく行かない部分が
-あるので以下のように修正する。
-ついでに`--rm`を追加して実行後はコンテナを削除する。
+ある(具体的には1.5-1.13の監査系の一部)ので、
+dockerイメージを利用するのではなく、スクリプトを直接実行する方式を活用する。
 
 ```bash
-$ docker run -it --rm --net host --pid host --userns host --cap-add audit_control \
-    -e DOCKER_CONTENT_TRUST=$DOCKER_CONTENT_TRUST \
-    -v /var/lib:/var/lib \
-    -v /var/run/docker.sock:/var/run/docker.sock \
-    -v /usr/lib/systemd:/usr/lib/systemd \
-    -v /etc:/etc --label docker_bench_security \
-	-v /usr/bin/docker-containerd:/usr/bin/docker-containerd \
-	-v /usr/bin/docker-runc:/usr/bin/docker-runc \
-    docker/docker-bench-security
+$ git clone https://github.com/docker/docker-bench-security.git
+$ cd docker-bench-security
+$ sudo sh docker-bench-security.sh
 ```
-
-すべてのチェックを正常に動かすには、コンテナ殻ではなく直接動かすほうがベターである。
-
-これではパスしたものも大量に出てくるので警告(`WARN`)のみを洗い出す。
-(`grep WARN`にパイプする)
-
 
 ## Docker Bench for Securityの実行結果
 
@@ -73,6 +54,10 @@ $ docker run -it --net host --pid host --userns host --cap-add audit_control    
 以降ではそれぞれのWARNについて警告内容への反映を行う。
 
 ### 1.1 - Ensure a separete partition for containers has been created
+
+コンテナのために分離されたパーティションを用意せよとの警告。
+具体的には、dockerが利用するデータ領域(デフォルトでは`/var/lib/docker`配下)
+に専用のディスクパーティションを準備する。
 
 ```bash
 $ sudo systemctl stop docker
@@ -134,10 +119,6 @@ Filesystem                         Size  Used Avail Use% Mounted on
 $ sudo systemctl start docker
 ```
 
-`
-[WARN] 1.1  - Ensure a separate partition for containers has been created
-`の表示が消えていることを確認する。
-
 ### 1.5 - 1.13 監査系の機能のチェック
 
 ここでは、`INFO`レベルのものを含むがまとめで記述する。
@@ -172,7 +153,7 @@ $ sudo apt-get install -y auditd
 
 Dockerのデーモンを監査対象とする。(※)
 
-※Dockerのデーモンなら`dockerd`のはずだがツールでは、対象が`docker`になっているので一旦はこれで良しとする。
+※Dockerのデーモンなら`dockerd`のはずだがツールでは、対象が`docker`になっているので一旦はこれで良しとする。(継続調査が必要？)
 
 ```bash
 $ echo "-w /usr/bin/docker -p wa" | sudo tee -a /etc/audit/audit.rules
@@ -199,13 +180,18 @@ echo "-w /etc/docker -p wa" | sudo tee -a /etc/audit/audit.rules
 
 #### 1.8  - Ensure auditing is configured for Docker files and directories - docker.service
 
+dockerデーモンの起動設定諸々が記述されている
+`/lib/systemd/system/docker.service`の監査を追加する。
+
 ```bash
 echo "-w /lib/systemd/system/docker.service -p wa" | sudo tee -a /etc/audit/audit.rules
 ```
 
-設定してもどうも`INFO`から`PASS`にならないのでこれについては別途調査する。
 
 #### 1.9  - Ensure auditing is configured for Docker files and directories - docker.socket
+
+dockerデーモンの起動設定諸々が記述されている
+`/lib/systemd/system/docker.service`の監査を追加する。
 
 ```bash
 $ echo "-w /lib/systemd/system/docker.socket -p wa" | sudo tee -a /etc/audit/audit.rules
@@ -313,6 +299,16 @@ Storage Driver: overlay2
 
 期待したとおりに`overlay2`になってますね。
 ます。
+## 2.7  - Ensure the default ulimit is configured appropriately
+
+
+```json
+{
+	"icc": false,
+	"storage-driver": "overlay2",
+	"default-ulimit": true
+}
+```
 
 ## 2.8  - Enable user namespace support
 
@@ -323,6 +319,7 @@ Storage Driver: overlay2
 {
 	"icc": false,
 	"storage-driver": "overlay2",
+	"default-ulimit": true,
 	"userns-remap": "default"
 }
 ```
@@ -355,6 +352,7 @@ $AllowedSender TCP, 127.0.0.1, 192.168.0.0/24
 {
 	"icc": false,
 	"storage-driver": "overlay2",
+	"default-ulimit": true,
 	"userns-remap": "default",
 	"log-driver": "syslog",
 	"log-opts": {
@@ -369,6 +367,7 @@ $AllowedSender TCP, 127.0.0.1, 192.168.0.0/24
 {
 	"icc": false,
 	"storage-driver": "overlay2",
+	"default-ulimit": true,
 	"userns-remap": "default",
 	"log-driver": "syslog",
 	"log-opts": {
@@ -384,6 +383,7 @@ $AllowedSender TCP, 127.0.0.1, 192.168.0.0/24
 {
 	"icc": false,
 	"storage-driver": "overlay2",
+	"default-ulimit": true,
 	"userns-remap": "default",
 	"log-driver": "syslog",
 	"log-opts": {
@@ -399,6 +399,7 @@ $AllowedSender TCP, 127.0.0.1, 192.168.0.0/24
 {
 	"icc": false,
 	"storage-driver": "overlay2",
+	"default-ulimit": true,
 	"userns-remap": "default",
 	"log-driver": "syslog",
 	"log-opts": {
