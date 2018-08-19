@@ -20,6 +20,65 @@
 
 ※ チャート = Debian/RHELにおけるパッケージ
 
+## 軽くお試し
+
+### maridadbのインストール
+
+```bash
+$ helm install stable/mariadb --name demo -f env.yaml
+```
+
+#### 補足(env.yaml)
+
+env.yaml
+
+```yaml
+service:
+  type: NodePort
+  port: 30001
+
+rootUser:
+    password: "testtesttest"
+    forcePassword: "testtesttest"
+
+master:
+  persistence:
+    enabled: false
+
+replication:
+  enabled: false
+```
+
+###　動作確認
+
+```bash
+$ kubectl get all
+NAME                 READY     STATUS    RESTARTS   AGE
+pod/demo-mariadb-0   0/1       Running   0          19s
+
+NAME                   TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)           AGE
+service/demo-mariadb   NodePort    10.43.103.122   <none>        30001:31809/TCP   19s
+service/kubernetes     ClusterIP   10.43.0.1       <none>        443/TCP           35d
+```
+
+```bash
+$ mysql -h 127.0.0.1 -P 31809 -u root -p
+Enter password: 
+Welcome to the MySQL monitor.  Commands end with ; or \g.
+Your MySQL connection id is 5
+Server version: 5.5.5-10.1.35-MariaDB Source distribution
+
+Copyright (c) 2000, 2018, Oracle and/or its affiliates. All rights reserved.
+
+Oracle is a registered trademark of Oracle Corporation and/or its
+affiliates. Other names may be trademarks of their respective
+owners.
+
+Type 'help;' or '\h' for help. Type '\c' to clear the current input statement.
+
+mysql> exit;
+```
+
 ## helmで独自チャートを作る
 
 ### helmチャートのファイル構成
@@ -51,10 +110,13 @@
 
 ### デプロイ
 
+今回はデモとして作成済みのRundeckの
+チャートをインストールします。
+
 #### helm install
 
 ```bash
-$ helm install . 
+$ helm install .
 ```
 
 #### kubectlへのパイプ
@@ -65,4 +127,15 @@ $ helm template . | kubectl -f -
 
 ## 触ってみての感想
 
-## helmの活用ポイント
+- チャートを作ること自体は大変
+    - 手数自体は確実に増えるので作るか作らないかは要判断
+- 標準で配布されているチャート
+    - GKEなら`helm install`だけで動作するが、ローカル、オンプレだと動作しないもの多し
+    - `README.md`をしっかり読んでチェックするべし
+        - `helm fetch リポジトリ/チャート名`
+        - `tar xvzf ダウンロードされたファイル.tgz`
+        - 中にある`README.md`を確認
+        - 環境にある程度合わせてvalueFileを作成
+        - `helm install リポジトリ/チャート名 -f valueFile`
+
+## まとめ(helmの活用ポイント)
